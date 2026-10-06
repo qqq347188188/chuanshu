@@ -1,0 +1,64 @@
+name: Build IPA
+
+# 在 GitHub 免费提供的 macOS 云环境编译 IPA（iOS 端）
+# 触发：push 到 main / master，或在 Actions 页面手动 Run workflow
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16+
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$XCODE" ]; then
+            XCODE=$(ls -d /Applications/Xcode_1[6-9]*.app /Applications/Xcode_2*.app 2>/dev/null | sort -V | tail -n 1)
+          fi
+          if [ -z "$XCODE" ]; then
+            echo "::error::未找到 Xcode 16 及以上版本"; exit 1
+          fi
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Archive (unsigned)
+        run: |
+          xcodebuild archive \
+            -project LanShare.xcodeproj \
+            -scheme LanShare \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath build/LanShare.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Package IPA
+        run: |
+          APP=$(find build -name "LanShare.app" -type d | head -n 1)
+          mkdir -p dist/Payload
+          cp -R "$APP" dist/Payload/
+          (cd dist && zip -qr ../LanShare-unsigned.ipa Payload)
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LanShare-unsigned-ipa
+          path: LanShare-unsigned.ipa
+          retention-days: 90

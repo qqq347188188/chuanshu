@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>局域网互传</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>UILaunchScreen</key>
+    <dict/>
+    <key>UIFileSharingEnabled</key>
+    <true/>
+    <key>UIApplicationSupportsIndirectInputEvents</key>
+    <true/>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>LanShare 需要访问本地网络，用于发现同一 Wi-Fi 下的其它设备并传输文件与文本</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>LanShare 需要把接收到的图片、视频保存到你的相簿</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>LanShare 需要读取你的相册，以便把选中的照片、视频发送给其它设备</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.lanshare.app</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>lanshare</string>
+            </array>
+        </dict>
+    </array>
+    <!--
+      文档类型（Open In / “用…打开” / “打开方式”）：
+      声明 public.data / public.content，使本程序像 Filza 一样出现在
+      任意文件的“打开方式”列表中。系统会把文件直接放进 App 沙盒
+      Documents/Inbox，无需 App Group，TrollStore / 自签下可用。
+    -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>All Documents</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.data</string>
+                <string>public.content</string>
+            </array>
+        </dict>
+    </array>
+</dict>
+</plist>

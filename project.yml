@@ -1,0 +1,31 @@
+name: LanShare
+
+options:
+  bundleIdPrefix: com.lanshare
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    GENERATE_INFOPLIST_FILE: NO
+
+targets:
+  LanShare:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Resources
+    settings:
+      base:
+        PRODUCT_NAME: LanShare
+        PRODUCT_BUNDLE_IDENTIFIER: com.lanshare.app
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_FILE: Info.plist
+        CODE_SIGN_ENTITLEMENTS: LanShare.entitlements
+        SWIFT_STRICT_CONCURRENCY: minimal
