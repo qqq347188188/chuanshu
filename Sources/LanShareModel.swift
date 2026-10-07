@@ -49,6 +49,13 @@ struct PendingFile: Identifiable {
     let size: Int64
 }
 
+/// 相册选中后、真实文件还在后台准备时的占位气泡（主线程立即显示，避免点“添加”卡顿）。
+struct PreparingDraft: Identifiable {
+    let id = UUID()
+    let name: String
+    let isVideo: Bool
+}
+
 final class LanShareModel: ObservableObject {
 
     let selfID: String
@@ -95,6 +102,11 @@ final class LanShareModel: ObservableObject {
     /// 放在模型里（引用类型）以便异步回调（相册加载完成）能安全更新并触发界面刷新，
     /// 避免把 @State 放在 View 结构体上被异步闭包捕获成值副本而失效。
     @Published var draftFiles: [PendingFile] = []
+
+    /// 相册选中后、真实文件还在后台准备时的占位气泡（点“添加”立即显示，不卡顿）。
+    @Published var preparingDrafts: [PreparingDraft] = []
+    /// 已被用户取消的准备中占位 id，避免后台完成后又误加入 draftFiles。
+    private var cancelledPreparing: Set<UUID> = []
 
     private let discovery: Discovery
     private let server = TransferServer()
@@ -669,12 +681,11 @@ final class LanShareModel: ObservableObject {
 
     // MARK: - 从系统相册导入（PHPicker 回调）
 
-    /// 由 ChatThreadView 的相册选择器回调触发：把选中的图片 / 视频拷入沙盒并加入待发送。
-    /// 放在模型（引用类型、常驻）里执行，彻底避免 SwiftUI 视图结构体在异步闭包里被捕获成
-    /// 离屏副本而导致 model 失效 / 界面不刷新。didFinishPicking 只负责 dismiss + 调用本方法，
-    /// 因此相册会立即关闭，不会卡顿。
+    /// 由 ChatThreadView 的相册选择器回调触发。
+    /// 关键优化：点“添加”后**立即**在主线程创建占位气泡（preparingDrafts），相册关闭后立刻可见，
+    /// 之后所有耗时的取数据 / 写盘 / 拷入沙盒都放到后台线程，主线程零阻塞，彻底消除“卡几秒”。
     ///
-    /// 关键：不再依赖 NSItemProvider 的 item 加载（在 iOS 26 上 picker 关闭后加载常被取消、回调不触发），
+    /// 不再依赖 NSItemProvider 的 item 加载（在 iOS 26 上 picker 关闭后加载常被取消、回调不触发），
     /// 改为用 result.assetIdentifier 取出 PHAsset，再通过 PHImageManager 直接读取原始数据/导出视频，
     /// 完全独立于 picker 生命周期，对 iCloud 照片也稳定。
     func importFromPhotoPicker(_ results: [PHPickerResult]) {
@@ -682,102 +693,128 @@ final class LanShareModel: ObservableObject {
             DispatchQueue.main.async { self.status = "未选择任何项目" }
             return
         }
-        DispatchQueue.main.async { self.status = "正在从相册导入 \(results.count) 个文件…" }
 
-        let fileManager = FileManager.default
-        let imageManager = PHImageManager.default()
+        // 1) 立即把每一项以占位气泡展示（主线程，瞬间完成，不卡顿）
+        var placeholders: [(UUID, PHPickerResult)] = []
+        var models: [PreparingDraft] = []
+        for result in results {
+            let isVideo = result.itemProvider.hasItemConformingToTypeIdentifier(UTType.movie.identifier)
+            let id = UUID()
+            placeholders.append((id, result))
+            models.append(PreparingDraft(id: id, name: isVideo ? "视频" : "照片", isVideo: isVideo))
+        }
+        DispatchQueue.main.async {
+            self.preparingDrafts.append(contentsOf: models)
+            self.status = "正在准备 \(results.count) 个文件…"
+        }
 
-        let imageOptions = PHImageRequestOptions()
-        imageOptions.isNetworkAccessAllowed = true      // iCloud 照片允许下载
-        imageOptions.deliveryMode = .highQualityFormat
-        imageOptions.isSynchronous = false
+        // 2) 后台逐个取出真实数据，完成后把占位气泡替换为可发送文件
+        func begin(_ items: [(UUID, PHPickerResult)]) {
+            let fileManager = FileManager.default
+            let imageManager = PHImageManager.default()
 
-        let videoOptions = PHVideoRequestOptions()
-        videoOptions.isNetworkAccessAllowed = true
-        videoOptions.deliveryMode = .highQualityFormat
+            let imageOptions = PHImageRequestOptions()
+            imageOptions.isNetworkAccessAllowed = true      // iCloud 照片允许下载
+            imageOptions.deliveryMode = .highQualityFormat
+            imageOptions.isSynchronous = false
 
-        func process(_ result: PHPickerResult) {
-            guard let assetID = result.assetIdentifier,
-                  let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetID], options: nil).firstObject else {
-                DispatchQueue.main.async { self.status = "无法定位所选的相册项目" }
-                return
-            }
-            if asset.mediaType == .video {
-                imageManager.requestExportSession(forVideo: asset, options: videoOptions,
-                                                 exportPreset: AVAssetExportPresetPassthrough) { [weak self] session, _ in
-                    guard let self = self else { return }
-                    guard let session else {
-                        DispatchQueue.main.async { self.status = "无法导出所选视频" }
+            let videoOptions = PHVideoRequestOptions()
+            videoOptions.isNetworkAccessAllowed = true
+            videoOptions.deliveryMode = .highQualityFormat
+
+            // 后台准备完成：移除占位气泡，加入可发送文件（或报告错误）
+            func finish(_ pid: UUID, dest: URL?, errorMsg: String?) {
+                DispatchQueue.main.async {
+                    self.preparingDrafts.removeAll { $0.id == pid }
+                    guard !self.cancelledPreparing.contains(pid) else {
+                        self.cancelledPreparing.remove(pid)
                         return
                     }
-                    let tmp = fileManager.temporaryDirectory
-                        .appendingPathComponent("video-\(Int(Date().timeIntervalSince1970 * 1000)).mov")
-                    session.outputURL = tmp
-                    session.outputFileType = .mov
-                    session.exportAsynchronously {
-                        guard session.status == .completed else {
-                            DispatchQueue.main.async {
-                                self.status = "导出视频失败：\(session.error?.localizedDescription ?? "未知错误")"
+                    if let dest {
+                        let size = Int64((try? dest.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+                        self.draftFiles.append(PendingFile(url: dest, name: dest.lastPathComponent, size: size))
+                        self.status = "已添加 \(self.draftFiles.count) 个文件，点右下角发送按钮即可发出"
+                    } else if let errorMsg {
+                        self.status = errorMsg
+                    }
+                }
+            }
+
+            func process(_ pid: UUID, _ result: PHPickerResult) {
+                guard let assetID = result.assetIdentifier,
+                      let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetID], options: nil).firstObject else {
+                    finish(pid, dest: nil, errorMsg: "无法定位所选的相册项目")
+                    return
+                }
+                if asset.mediaType == .video {
+                    imageManager.requestExportSession(forVideo: asset, options: videoOptions,
+                                                     exportPreset: AVAssetExportPresetPassthrough) { session, _ in
+                        guard let session else {
+                            finish(pid, dest: nil, errorMsg: "无法导出所选视频")
+                            return
+                        }
+                        let tmp = fileManager.temporaryDirectory
+                            .appendingPathComponent("video-\(Int(Date().timeIntervalSince1970 * 1000)).mov")
+                        session.outputURL = tmp
+                        session.outputFileType = .mov
+                        session.exportAsynchronously {
+                            guard session.status == .completed else {
+                                finish(pid, dest: nil, errorMsg: "导出视频失败：\(session.error?.localizedDescription ?? "未知错误")")
+                                return
                             }
-                            return
+                            let dest = self.copyIntoIncoming(tmp)
+                            try? fileManager.removeItem(at: tmp)
+                            finish(pid, dest: dest, errorMsg: dest == nil ? "无法保存所选视频" : nil)
                         }
-                        defer { try? fileManager.removeItem(at: tmp) }
-                        guard let dest = self.copyIntoIncoming(tmp) else {
-                            DispatchQueue.main.async { self.status = "无法保存所选视频" }
-                            return
-                        }
-                        self.appendDraft(dest, originalName: dest.lastPathComponent)
                     }
-                }
-            } else {
-                imageManager.requestImageDataAndOrientation(for: asset, options: imageOptions) { [weak self] data, uti, _, info in
-                    guard let self = self else { return }
-                    guard let data, let uti else {
+                } else {
+                    imageManager.requestImageDataAndOrientation(for: asset, options: imageOptions) { data, uti, _, info in
                         let detail = (info?[PHImageErrorKey] as? Error)?.localizedDescription ?? "未知错误"
-                        DispatchQueue.main.async { self.status = "读取照片失败：\(detail)" }
-                        return
-                    }
-                    let ext = (UTType(uti)?.preferredFilenameExtension) ?? "jpg"
-                    let name = "photo-\(Int(Date().timeIntervalSince1970 * 1000)).\(ext)"
-                    let tmp = fileManager.temporaryDirectory.appendingPathComponent(name)
-                    do {
-                        try data.write(to: tmp)
-                        defer { try? fileManager.removeItem(at: tmp) }
-                        guard let dest = self.copyIntoIncoming(tmp) else {
-                            DispatchQueue.main.async { self.status = "无法保存所选照片" }
+                        guard let data, let uti else {
+                            finish(pid, dest: nil, errorMsg: "读取照片失败：\(detail)")
                             return
                         }
-                        self.appendDraft(dest, originalName: dest.lastPathComponent)
-                    } catch {
-                        DispatchQueue.main.async { self.status = "写入照片失败：\(error.localizedDescription)" }
+                        let ext = (UTType(uti)?.preferredFilenameExtension) ?? "jpg"
+                        let name = "photo-\(Int(Date().timeIntervalSince1970 * 1000)).\(ext)"
+                        let tmp = fileManager.temporaryDirectory.appendingPathComponent(name)
+                        do {
+                            try data.write(to: tmp)
+                            let dest = self.copyIntoIncoming(tmp)
+                            try? fileManager.removeItem(at: tmp)
+                            finish(pid, dest: dest, errorMsg: dest == nil ? "无法保存所选照片" : nil)
+                        } catch {
+                            finish(pid, dest: nil, errorMsg: "写入照片失败：\(error.localizedDescription)")
+                        }
                     }
                 }
             }
+
+            for (pid, result) in items { process(pid, result) }
         }
 
         // 读取相册资源需要“照片”读取授权；先确认授权再处理。
         let current = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         if current == .authorized || current == .limited {
-            for result in results { process(result) }
+            begin(placeholders)
         } else {
             PHPhotoLibrary.requestAuthorization(for: .readWrite) { [weak self] status in
                 guard let self = self else { return }
                 guard status == .authorized || status == .limited else {
-                    DispatchQueue.main.async { self.status = "未授权访问相册，无法选取照片/视频" }
+                    DispatchQueue.main.async {
+                        self.preparingDrafts.removeAll()
+                        self.status = "未授权访问相册，无法选取照片/视频"
+                    }
                     return
                 }
-                for result in results { process(result) }
+                begin(placeholders)
             }
         }
     }
 
-    /// 把已拷入沙盒的文件加入待发送草稿，并给出状态提示（主线程调用）
-    private func appendDraft(_ dest: URL, originalName: String) {
-        let size = Int64((try? dest.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
-        DispatchQueue.main.async {
-            self.draftFiles.append(PendingFile(url: dest, name: dest.lastPathComponent, size: size))
-            self.status = "已添加 \(self.draftFiles.count) 个文件，点右下角发送按钮即可发出"
-        }
+    /// 用户取消某个“准备中”的占位气泡
+    func cancelPreparing(_ id: UUID) {
+        cancelledPreparing.insert(id)
+        preparingDrafts.removeAll { $0.id == id }
     }
 
     // MARK: - 持久化
