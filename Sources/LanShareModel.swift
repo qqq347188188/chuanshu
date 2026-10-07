@@ -774,16 +774,19 @@ final class LanShareModel: ObservableObject {
                             finish(pid, dest: nil, errorMsg: "读取照片失败：\(detail)")
                             return
                         }
-                        let ext = (UTType(uti)?.preferredFilenameExtension) ?? "jpg"
-                        let name = "photo-\(Int(Date().timeIntervalSince1970 * 1000)).\(ext)"
-                        let tmp = fileManager.temporaryDirectory.appendingPathComponent(name)
-                        do {
-                            try data.write(to: tmp)
-                            let dest = self.copyIntoIncoming(tmp)
-                            try? fileManager.removeItem(at: tmp)
-                            finish(pid, dest: dest, errorMsg: dest == nil ? "无法保存所选照片" : nil)
-                        } catch {
-                            finish(pid, dest: nil, errorMsg: "写入照片失败：\(error.localizedDescription)")
+                        // 写盘 + 拷入沙盒较重，放到后台线程，避免选多张照片时主线程被 N 次 I/O 阻塞而卡顿。
+                        DispatchQueue.global(qos: .userInitiated).async {
+                            let ext = (UTType(uti)?.preferredFilenameExtension) ?? "jpg"
+                            let name = "photo-\(Int(Date().timeIntervalSince1970 * 1000)).\(ext)"
+                            let tmp = fileManager.temporaryDirectory.appendingPathComponent(name)
+                            do {
+                                try data.write(to: tmp)
+                                let dest = self.copyIntoIncoming(tmp)
+                                try? fileManager.removeItem(at: tmp)
+                                finish(pid, dest: dest, errorMsg: dest == nil ? "无法保存所选照片" : nil)
+                            } catch {
+                                finish(pid, dest: nil, errorMsg: "写入照片失败：\(error.localizedDescription)")
+                            }
                         }
                     }
                 }
