@@ -31,40 +31,6 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    if model.peers.isEmpty {
-                        HStack(spacing: 10) {
-                            ProgressView()
-                            Text("正在搜索同一局域网内的设备…")
-                                .foregroundStyle(.secondary)
-                        }
-                    } else {
-                        ForEach(model.peers) { peer in
-                            NavigationLink(value: peer.id) {
-                                HStack(spacing: 12) {
-                                    Circle()
-                                        .fill(model.isOnline(peer.id) ? Color.green : Color.gray.opacity(0.5))
-                                        .frame(width: 10, height: 10)
-                                    Image(systemName: peer.isIOS ? "iphone" : "desktopcomputer")
-                                        .foregroundStyle(Color.accentBrand)
-                                        .frame(width: 24)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(peer.name).foregroundStyle(.primary)
-                                        Text(peer.address)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer(minLength: 0)
-                                }
-                            }
-                        }
-                    }
-                } header: {
-                    Text("局域网设备")
-                } footer: {
-                    Text("所有设备需连接同一个 Wi-Fi。Windows 端若被防火墙拦截，请在弹窗中选择允许访问。")
-                }
-
-                Section {
                     HStack {
                         Text("聊天文件缓存")
                         Spacer(minLength: 8)
