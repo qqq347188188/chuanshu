@@ -106,9 +106,12 @@ struct ChatThreadView: View {
 
     private var composeBar: some View {
         VStack(spacing: 8) {
-            if !model.draftFiles.isEmpty || !model.sharedInbox.isEmpty {
+            if !model.draftFiles.isEmpty || !model.sharedInbox.isEmpty || !model.preparingDrafts.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
+                        ForEach(model.preparingDrafts) { file in
+                            preparingChip(file)
+                        }
                         ForEach(model.draftFiles) { file in
                             chip(file.name, subtitle: ByteFormatter.string(from: file.size)) {
                                 model.draftFiles.removeAll { $0.id == file.id }
@@ -167,9 +170,10 @@ struct ChatThreadView: View {
     }
 
     private var canSend: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !model.draftFiles.isEmpty
-            || !model.sharedInbox.isEmpty
+            || !model.sharedInbox.isEmpty)
+        && model.preparingDrafts.isEmpty
     }
 
     private func chip(_ name: String, subtitle: String, onTap: @escaping () -> Void, onAdd: (() -> Void)? = nil) -> some View {
@@ -190,7 +194,29 @@ struct ChatThreadView: View {
         .onTapGesture { onAdd?() }
     }
 
+    /// 相册选中后、真实文件还在后台准备时显示的占位气泡（带“准备中”转圈与取消按钮）
+    private func preparingChip(_ file: PreparingDraft) -> some View {
+        HStack(spacing: 6) {
+            ProgressView()
+                .controlSize(.small)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(file.name).font(.caption).lineLimit(1)
+                Text("准备中…").font(.caption2).foregroundStyle(.secondary)
+            }
+            Button { model.cancelPreparing(file.id) } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(6)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
     private func sendCurrent() {
+        guard model.preparingDrafts.isEmpty else {
+            model.status = "文件还在准备中，请稍候…"
+            return
+        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         var files = model.draftFiles
         if !model.sharedInbox.isEmpty {
