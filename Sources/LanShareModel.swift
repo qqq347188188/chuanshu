@@ -51,7 +51,7 @@ struct PendingFile: Identifiable {
 
 /// 相册选中后、真实文件还在后台准备时的占位气泡（主线程立即显示，避免点“添加”卡顿）。
 struct PreparingDraft: Identifiable {
-    let id = UUID()
+    let id: UUID
     let name: String
     let isVideo: Bool
 }
